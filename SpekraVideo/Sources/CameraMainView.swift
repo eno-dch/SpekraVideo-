@@ -1759,37 +1759,7 @@ struct CameraMainView: View {
                 .frame(height: 32)
 
                 if currentFilm.category != .blackAndWhite {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 6) {
-                            Text("相纸")
-                                .font(.system(size: 10, weight: .semibold))
-                                .foregroundColor(.white.opacity(0.55))
-                                .padding(.trailing, 2)
-                            ForEach(Array(SpectralCatalog.papers.enumerated()), id: \.element.id) { idx, paper in
-                                if idx != 2 {
-                                    let selected = controller.params.paperIndex == idx
-                                    Button(action: {
-                                        UISelectionFeedbackGenerator().selectionChanged()
-                                        controller.params.paperIndex = idx
-                                    }) {
-                                        Text(paper.shortName)
-                                            .font(.system(size: 10.5, weight: .semibold))
-                                            .foregroundColor(selected ? accent : .white.opacity(0.8))
-                                            .lineLimit(1)
-                                            .fixedSize(horizontal: true, vertical: false)
-                                            .padding(.horizontal, 9)
-                                            .padding(.vertical, 4.5)
-                                            .background(selected ? accent.opacity(0.18) : Color.white.opacity(0.08), in: Capsule())
-                                            .overlay(
-                                                Capsule()
-                                                    .stroke(selected ? accent.opacity(0.6) : Color.clear, lineWidth: 0.7)
-                                            )
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    .frame(height: 30)
+                    paperPicker
                 } else {
                     Picker("反差号", selection: $controller.params.bwGradeIndex) {
                         ForEach(0..<SpectralCatalog.bwGrades.count, id: \.self) { g in
@@ -1868,6 +1838,47 @@ struct CameraMainView: View {
             RoundedRectangle(cornerRadius: 14)
                 .stroke(Color.white.opacity(0.14), lineWidth: 0.7)
         )
+    }
+
+    private var paperPicker: some View {
+        let papers = SpectralCatalog.papers
+        // Keep the catalog indices used by the film engine and saved settings.
+        let visibleIndices = papers.indices.filter { $0 != 2 }
+
+        return ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                Text("相纸")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.55))
+                    .padding(.trailing, 2)
+                ForEach(visibleIndices, id: \.self) { index in
+                    paperButton(title: papers[index].shortName, index: index)
+                }
+            }
+        }
+        .frame(height: 30)
+    }
+
+    private func paperButton(title: String, index: Int) -> some View {
+        let selected = controller.params.paperIndex == index
+        let foreground = selected ? accent : Color.white.opacity(0.8)
+        let background = selected ? accent.opacity(0.18) : Color.white.opacity(0.08)
+        let border = selected ? accent.opacity(0.6) : Color.clear
+
+        return Button {
+            UISelectionFeedbackGenerator().selectionChanged()
+            controller.params.paperIndex = index
+        } label: {
+            Text(title)
+                .font(.system(size: 10.5, weight: .semibold))
+                .foregroundColor(foreground)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+                .padding(.horizontal, 9)
+                .padding(.vertical, 4.5)
+                .background(background, in: Capsule())
+                .overlay(Capsule().stroke(border, lineWidth: 0.7))
+        }
     }
 
     private func miniSlider(_ title: String, value: Binding<Float>, range: ClosedRange<Float>, fmt: String) -> some View {
