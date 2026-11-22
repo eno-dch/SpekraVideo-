@@ -12,15 +12,60 @@ permissions:
 jobs:
   build:
     runs-on: macos-26
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Fix SwiftUI type checking
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('SpekraVideo/Sources/CameraMainView.swift')
+          s = p.read_text(encoding='utf-8')
+          begin = '                        ForEach(Array(SpectralCatalog.papers.enumerated()), id: \\.element.id) { idx, paper in'
+          end = '\n                        }\n                    }\n                    .frame(height: 30)'
+          a = s.index(begin)
+          b = s.index(end, a)
+          replacement = r'''                        ForEach(0..<SpectralCatalog.papers.count, id: \.self) { idx in
+                              if idx != 2 {
+                                  paperChip(idx)
+                              }
+                          }'''
+          s = s[:a] + replacement + s[b + len('\n                        }'):]
+          helper = '''    private func paperChip(_ idx: Int) -> some View {
+              let paper = SpectralCatalog.papers[idx]
+              let selected = controller.params.paperIndex == idx
+              return Button(action: {
+                  UISelectionFeedbackGenerator().selectionChanged()
+                  controller.params.paperIndex = idx
+              }) {
+                  Text(paper.shortName)
+                      .font(.system(size: 10.5, weight: .semibold))
+                      .foregroundColor(selected ? accent : Color.white.opacity(0.8))
+                      .lineLimit(1)
+                      .fixedSize(horizontal: true, vertical: false)
+                      .padding(.horizontal, 9)
+                      .padding(.vertical, 4.5)
+                      .background(selected ? accent.opacity(0.18) : Color.white.opacity(0.08), in: Capsule())
+                      .overlay(
+                          Capsule().stroke(selected ? accent.opacity(0.6) : Color.clear, lineWidth: 0.7)
+                      )
+              }
+          }
+
+          '''
+          anchor = '    private func miniSlider('
+          assert anchor in s
+          s = s.replace(anchor, helper + anchor, 1)
+          p.write_text(s, encoding='utf-8')
+          print('Applied SwiftUI fix')
+          PY
+
       - name: Build unsigned IPA
+        shell: bash
         run: |
           set -euo pipefail
-
           xcodebuild \
             -project SpekraVideo.xcodeproj \
             -scheme SpekraVideo \
@@ -36,7 +81,6 @@ jobs:
 
           mkdir -p Payload
           cp -R "$RUNNER_TEMP/DerivedData/Build/Products/OpenSource-iphoneos/SpekraVideo.app" Payload/
-
           zip -qry SpekraVideo-unsigned.ipa Payload
 
       - name: Upload IPA
@@ -44,3 +88,4 @@ jobs:
         with:
           name: SpekraVideo-unsigned
           path: SpekraVideo-unsigned.ipa
+          if-no-files-found: error
