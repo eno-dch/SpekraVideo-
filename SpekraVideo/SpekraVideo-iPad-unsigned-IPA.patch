@@ -1,0 +1,241 @@
+From c02992aeff9ae87e589f94292d0a56b804b05298 Mon Sep 17 00:00:00 2001
+From: chenghao dong <d13066650845@gmail.com>
+Date: Sun, 22 Nov 2026 04:32:06 +0000
+Subject: [PATCH] Fix SwiftUI paper picker and build unsigned iPad IPA
+
+---
+ .github/workflows/build-ipad.yml         | 88 ++++++++++--------------
+ SpekraVideo.xcodeproj/project.pbxproj    |  2 +-
+ SpekraVideo/Sources/CameraMainView.swift | 73 +++++++++++---------
+ 3 files changed, 79 insertions(+), 84 deletions(-)
+
+diff --git a/.github/workflows/build-ipad.yml b/.github/workflows/build-ipad.yml
+index 1c773ca..a22d128 100644
+--- a/.github/workflows/build-ipad.yml
++++ b/.github/workflows/build-ipad.yml
+@@ -1,9 +1,10 @@
+-
+ name: Build iPad IPA
+ 
+ on:
+   push:
+     branches: [main]
++  pull_request:
++    branches: [main]
+   workflow_dispatch:
+ 
+ permissions:
+@@ -16,56 +17,11 @@ jobs:
+       - name: Checkout
+         uses: actions/checkout@v4
+ 
+-      - name: Fix SwiftUI type checking
+-        shell: bash
+-        run: |
+-          python3 - <<'PY'
+-          from pathlib import Path
+-          p = Path('SpekraVideo/Sources/CameraMainView.swift')
+-          s = p.read_text(encoding='utf-8')
+-          begin = '                        ForEach(Array(SpectralCatalog.papers.enumerated()), id: \\.element.id) { idx, paper in'
+-          end = '\n                        }\n                    }\n                    .frame(height: 30)'
+-          a = s.index(begin)
+-          b = s.index(end, a)
+-          replacement = r'''                        ForEach(0..<SpectralCatalog.papers.count, id: \.self) { idx in
+-                              if idx != 2 {
+-                                  paperChip(idx)
+-                              }
+-                          }'''
+-          s = s[:a] + replacement + s[b + len('\n                        }'):]
+-          helper = '''    private func paperChip(_ idx: Int) -> some View {
+-              let paper = SpectralCatalog.papers[idx]
+-              let selected = controller.params.paperIndex == idx
+-              return Button(action: {
+-                  UISelectionFeedbackGenerator().selectionChanged()
+-                  controller.params.paperIndex = idx
+-              }) {
+-                  Text(paper.shortName)
+-                      .font(.system(size: 10.5, weight: .semibold))
+-                      .foregroundColor(selected ? accent : Color.white.opacity(0.8))
+-                      .lineLimit(1)
+-                      .fixedSize(horizontal: true, vertical: false)
+-                      .padding(.horizontal, 9)
+-                      .padding(.vertical, 4.5)
+-                      .background(selected ? accent.opacity(0.18) : Color.white.opacity(0.08), in: Capsule())
+-                      .overlay(
+-                          Capsule().stroke(selected ? accent.opacity(0.6) : Color.clear, lineWidth: 0.7)
+-                      )
+-              }
+-          }
+-
+-          '''
+-          anchor = '    private func miniSlider('
+-          assert anchor in s
+-          s = s.replace(anchor, helper + anchor, 1)
+-          p.write_text(s, encoding='utf-8')
+-          print('Applied SwiftUI fix')
+-          PY
+-
+-      - name: Build unsigned IPA
++      - name: Build unsigned iOS app
+         shell: bash
+         run: |
+           set -euo pipefail
++          xcodebuild -version
+           xcodebuild \
+             -project SpekraVideo.xcodeproj \
+             -scheme SpekraVideo \
+@@ -73,15 +29,43 @@ jobs:
+             -sdk iphoneos \
+             -destination 'generic/platform=iOS' \
+             -derivedDataPath "$RUNNER_TEMP/DerivedData" \
++            ARCHS=arm64 \
+             CODE_SIGNING_ALLOWED=NO \
+             CODE_SIGNING_REQUIRED=NO \
+             'CODE_SIGN_IDENTITY=' \
+-            'TARGETED_DEVICE_FAMILY=1,2' \
+             build
+ 
+-          mkdir -p Payload
+-          cp -R "$RUNNER_TEMP/DerivedData/Build/Products/OpenSource-iphoneos/SpekraVideo.app" Payload/
+-          zip -qry SpekraVideo-unsigned.ipa Payload
++      - name: Verify and package unsigned IPA
++        shell: bash
++        run: |
++          set -euo pipefail
++          app="$RUNNER_TEMP/DerivedData/Build/Products/OpenSource-iphoneos/SpekraVideo.app"
++          executable="$app/SpekraVideo"
++          test "$(xcrun lipo -archs "$executable")" = arm64
++          xcrun vtool -show-build "$executable" | grep -E '^[[:space:]]*platform[[:space:]]+IOS$'
++
++          python3 - "$app/Info.plist" <<'PY'
++          import plistlib
++          import sys
++
++          with open(sys.argv[1], "rb") as file:
++              info = plistlib.load(file)
++          if 2 not in info.get("UIDeviceFamily", []):
++              sys.exit("The app must include the iPad device family in UIDeviceFamily")
++          if not info.get("NSCameraUsageDescription", "").strip():
++              sys.exit("The app must include NSCameraUsageDescription")
++          PY
++
++          if codesign --display "$app" 2>/dev/null; then
++            echo "::error::The application bundle is signed"
++            exit 1
++          fi
++          test ! -e "$app/embedded.mobileprovision"
++
++          mkdir Payload
++          cp -R "$app" Payload/
++          zip -qry --symlinks SpekraVideo-unsigned.ipa Payload
++          unzip -tq SpekraVideo-unsigned.ipa
+ 
+       - name: Upload IPA
+         uses: actions/upload-artifact@v4
+diff --git a/SpekraVideo.xcodeproj/project.pbxproj b/SpekraVideo.xcodeproj/project.pbxproj
+index 3b4c035..ab4bf9a 100644
+--- a/SpekraVideo.xcodeproj/project.pbxproj
++++ b/SpekraVideo.xcodeproj/project.pbxproj
+@@ -342,7 +342,7 @@
+ 				SDKROOT = iphoneos;
+ 				SWIFT_OBJC_BRIDGING_HEADER = "SpekraVideo/Sources/SpekraVideo-Bridging-Header.h";
+ 				SWIFT_VERSION = 5.0;
+-				TARGETED_DEVICE_FAMILY = 1;
++				TARGETED_DEVICE_FAMILY = "1,2";
+ 				VALIDATE_PRODUCT = YES;
+ 			};
+ 			name = OpenSource;
+diff --git a/SpekraVideo/Sources/CameraMainView.swift b/SpekraVideo/Sources/CameraMainView.swift
+index a70b077..f3b4113 100644
+--- a/SpekraVideo/Sources/CameraMainView.swift
++++ b/SpekraVideo/Sources/CameraMainView.swift
+@@ -1759,37 +1759,7 @@ struct CameraMainView: View {
+                 .frame(height: 32)
+ 
+                 if currentFilm.category != .blackAndWhite {
+-                    ScrollView(.horizontal, showsIndicators: false) {
+-                        HStack(spacing: 6) {
+-                            Text("相纸")
+-                                .font(.system(size: 10, weight: .semibold))
+-                                .foregroundColor(.white.opacity(0.55))
+-                                .padding(.trailing, 2)
+-                            ForEach(Array(SpectralCatalog.papers.enumerated()), id: \.element.id) { idx, paper in
+-                                if idx != 2 {
+-                                    let selected = controller.params.paperIndex == idx
+-                                    Button(action: {
+-                                        UISelectionFeedbackGenerator().selectionChanged()
+-                                        controller.params.paperIndex = idx
+-                                    }) {
+-                                        Text(paper.shortName)
+-                                            .font(.system(size: 10.5, weight: .semibold))
+-                                            .foregroundColor(selected ? accent : .white.opacity(0.8))
+-                                            .lineLimit(1)
+-                                            .fixedSize(horizontal: true, vertical: false)
+-                                            .padding(.horizontal, 9)
+-                                            .padding(.vertical, 4.5)
+-                                            .background(selected ? accent.opacity(0.18) : Color.white.opacity(0.08), in: Capsule())
+-                                            .overlay(
+-                                                Capsule()
+-                                                    .stroke(selected ? accent.opacity(0.6) : Color.clear, lineWidth: 0.7)
+-                                            )
+-                                    }
+-                                }
+-                            }
+-                        }
+-                    }
+-                    .frame(height: 30)
++                    paperPicker
+                 } else {
+                     Picker("反差号", selection: $controller.params.bwGradeIndex) {
+                         ForEach(0..<SpectralCatalog.bwGrades.count, id: \.self) { g in
+@@ -1870,6 +1840,47 @@ struct CameraMainView: View {
+         )
+     }
+ 
++    private var paperPicker: some View {
++        let papers = SpectralCatalog.papers
++        // Keep the catalog indices used by the film engine and saved settings.
++        let visibleIndices = papers.indices.filter { $0 != 2 }
++
++        return ScrollView(.horizontal, showsIndicators: false) {
++            HStack(spacing: 6) {
++                Text("相纸")
++                    .font(.system(size: 10, weight: .semibold))
++                    .foregroundColor(.white.opacity(0.55))
++                    .padding(.trailing, 2)
++                ForEach(visibleIndices, id: \.self) { index in
++                    paperButton(title: papers[index].shortName, index: index)
++                }
++            }
++        }
++        .frame(height: 30)
++    }
++
++    private func paperButton(title: String, index: Int) -> some View {
++        let selected = controller.params.paperIndex == index
++        let foreground = selected ? accent : Color.white.opacity(0.8)
++        let background = selected ? accent.opacity(0.18) : Color.white.opacity(0.08)
++        let border = selected ? accent.opacity(0.6) : Color.clear
++
++        return Button {
++            UISelectionFeedbackGenerator().selectionChanged()
++            controller.params.paperIndex = index
++        } label: {
++            Text(title)
++                .font(.system(size: 10.5, weight: .semibold))
++                .foregroundColor(foreground)
++                .lineLimit(1)
++                .fixedSize(horizontal: true, vertical: false)
++                .padding(.horizontal, 9)
++                .padding(.vertical, 4.5)
++                .background(background, in: Capsule())
++                .overlay(Capsule().stroke(border, lineWidth: 0.7))
++        }
++    }
++
+     private func miniSlider(_ title: String, value: Binding<Float>, range: ClosedRange<Float>, fmt: String) -> some View {
+         VStack(alignment: .leading, spacing: 2) {
+             HStack {
+-- 
+2.56.1
+
