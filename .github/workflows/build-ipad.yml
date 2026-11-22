@@ -1,0 +1,46 @@
+
+name: Build iPad IPA
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build unsigned IPA
+        run: |
+          set -euo pipefail
+
+          xcodebuild \
+            -project SpekraVideo.xcodeproj \
+            -scheme SpekraVideo \
+            -configuration OpenSource \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            'CODE_SIGN_IDENTITY=' \
+            'TARGETED_DEVICE_FAMILY=1,2' \
+            build
+
+          mkdir -p Payload
+          cp -R "$RUNNER_TEMP/DerivedData/Build/Products/OpenSource-iphoneos/SpekraVideo.app" Payload/
+
+          zip -qry SpekraVideo-unsigned.ipa Payload
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: SpekraVideo-unsigned
+          path: SpekraVideo-unsigned.ipa
